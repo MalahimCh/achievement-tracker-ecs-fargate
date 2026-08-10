@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Achievement Tracker — ECS Fargate Architecture</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e1a;
+    --panel:#0e1526;
+    --panel-2:#111a2e;
+    --panel-3:#0c1424;
+    --line:#1e293b;
+    --line-soft:#16213a;
+    --teal:#5eead4;
+    --teal-dim:#2dd4bf;
+    --teal-glow:rgba(94,234,212,0.12);
+    --orange:#fb923c;
+    --orange-dim:#f59e0b;
+    --purple:#a78bfa;
+    --text:#e2e8f0;
+    --text-dim:#94a3b8;
+    --text-faint:#5b6b85;
+    --red:#f87171;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse 1200px 600px at 15% -5%, rgba(94,234,212,0.05), transparent),
+      radial-gradient(ellipse 1000px 500px at 90% 10%, rgba(167,139,250,0.04), transparent),
+      var(--bg);
+    color:var(--text);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+  .wrap{max-width:1720px;margin:0 auto;padding:56px 40px 100px;}
+
+  /* ---------- header ---------- */
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;letter-spacing:.16em;font-weight:600;
+    color:var(--teal);text-transform:uppercase;margin-bottom:14px;
+  }
+  h1{
+    font-size:34px;font-weight:800;letter-spacing:-0.02em;margin:0 0 16px;
+    color:#f8fafc;
+  }
+  .subtitle{
+    max-width:900px;font-size:15px;line-height:1.65;color:var(--text-dim);margin:0;
+  }
+  .subtitle .mono{color:#cbd5e1;background:rgba(148,163,184,0.08);padding:1px 6px;border-radius:4px;font-size:13px;}
+
+  /* ---------- generic panel/card ---------- */
+  .panel{
+    border:1px solid var(--line);border-radius:14px;background:var(--panel);
+  }
+  .dashed{border-style:dashed;}
+  .tag{
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--text-faint);
+  }
+
+  /* ---------- top flow: build & push vs browser user ---------- */
+  .top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:40px;margin:48px 0 26px;}
+  .actor{display:flex;align-items:flex-start;gap:12px;}
+  .actor-icon{
+    width:34px;height:34px;border-radius:50%;border:1.5px solid var(--text-dim);
+    display:flex;align-items:center;justify-content:center;flex:none;color:var(--text-dim);
+  }
+  .actor-label{font-size:14px;font-weight:600;color:#f1f5f9;}
+  .actor-sub{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text-faint);margin-top:2px;}
+
+  .node{
+    border:1px solid var(--line);background:var(--panel-2);border-radius:12px;
+    padding:16px 18px;position:relative;
+  }
+  .node.accent{border-color:rgba(94,234,212,0.35);box-shadow:0 0 0 1px rgba(94,234,212,0.06) inset;}
+  .node-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .icon-chip{
+    width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+    background:rgba(94,234,212,0.1);color:var(--teal);flex:none;
+  }
+  .icon-chip.orange{background:rgba(251,146,60,0.12);color:var(--orange);}
+  .icon-chip.purple{background:rgba(167,139,250,0.12);color:var(--purple);}
+  .icon-chip.gray{background:rgba(148,163,184,0.1);color:#94a3b8;}
+  .node-title{font-weight:700;font-size:14px;color:#f8fafc;}
+  .node-body{font-family:'JetBrains Mono',monospace;font-size:11.3px;line-height:1.7;color:var(--text-dim);}
+  .node-body b{color:#cbd5e1;font-weight:600;}
+  .node-body .dim{color:var(--text-faint);}
+  .node-body hr{border:none;border-top:1px solid var(--line-soft);margin:8px 0;}
+
+  .buildbox{width:300px;}
+  .browserbox{text-align:right;}
+
+  /* connector: build -> ECR (orange) */
+  .connector-orange{
+    display:flex;align-items:center;gap:8px;margin:14px 0 8px 6px;color:var(--orange);
+    font-family:'JetBrains Mono',monospace;font-size:11px;
+  }
+  .connector-orange svg{flex:none;}
+
+  /* ---------- AWS region big panel ---------- */
+  .region{
+    border:1.5px dashed rgba(94,234,212,0.28);border-radius:18px;
+    background:linear-gradient(180deg, rgba(94,234,212,0.025), transparent 8%);
+    padding:34px 30px 40px;position:relative;margin-top:6px;
+  }
+  .region-label{
+    position:absolute;top:-13px;left:26px;background:var(--bg);padding:0 10px;
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:var(--teal);
+    text-transform:uppercase;
+  }
+  .vpc{
+    border:1px solid rgba(94,234,212,0.18);border-radius:14px;background:rgba(14,21,38,0.5);
+    padding:28px 24px 30px;position:relative;margin-top:10px;
+  }
+  .vpc-label{
+    position:absolute;top:-11px;left:22px;background:var(--bg);padding:0 8px;
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#7dd3c8;
+  }
+
+  .subnet-block{
+    border:1px solid var(--line);border-radius:12px;background:rgba(17,26,46,0.55);
+    padding:22px 22px 24px;position:relative;margin-top:26px;
+  }
+  .subnet-block.private{background:rgba(10,15,28,0.65);border-color:rgba(148,163,184,0.14);}
+  .subnet-label{
+    position:absolute;top:-10px;left:18px;background:var(--bg);padding:0 8px;
+    font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.07em;color:var(--text-dim);
+    text-transform:uppercase;
+  }
+
+  /* nginx centered box */
+  .center-row{display:flex;justify-content:center;}
+  .nginx-box{width:360px;}
+
+  /* arrow pieces */
+  .vline{width:2px;background:linear-gradient(var(--teal-dim), var(--teal-dim));margin:0 auto;position:relative;opacity:.85;}
+  .vline.dashed-line{background:none;border-left:2px dashed rgba(148,163,184,0.35);width:0;}
+  .vline::after{
+    content:"";position:absolute;left:50%;bottom:-1px;transform:translateX(-50%);
+    border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid var(--teal-dim);
+  }
+  .arrow-label{
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--teal);
+    background:var(--bg);padding:2px 8px;border-radius:5px;border:1px solid rgba(94,234,212,0.25);
+    white-space:nowrap;
+  }
+  .arrow-label.faint{color:var(--text-dim);border-color:var(--line);}
+  .arrow-stack{display:flex;flex-direction:column;align-items:center;gap:4px;margin:6px 0;}
+
+  /* branch grid */
+  .branch-bar{
+    height:2px;background:var(--teal-dim);margin:0 16.6%;position:relative;opacity:.85;
+  }
+  .branch-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:26px;margin-top:0;}
+  .branch-col{display:flex;flex-direction:column;align-items:center;}
+  .branch-stub{width:2px;height:26px;background:var(--teal-dim);position:relative;}
+  .branch-stub::after{
+    content:"";position:absolute;left:50%;bottom:-1px;transform:translateX(-50%);
+    border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid var(--teal-dim);
+  }
+  .branch-pill{
+    font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;color:#0a0e1a;
+    background:var(--teal);padding:3px 12px;border-radius:20px;margin:6px 0 12px;
+  }
+  .branch-col .node{width:100%;}
+  .passthrough{
+    display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+    height:100%;padding-top:6px;
+  }
+  .passthrough .tagnote{
+    margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-faint);
+    text-align:center;max-width:180px;line-height:1.5;
+  }
+  .passthrough .vline{height:120px;}
+
+  .converge-wrap{margin-top:10px;}
+
+  /* backend row */
+  .backend-row{display:flex;justify-content:center;margin-top:10px;}
+  .backend-box{width:380px;}
+
+  /* db + efs */
+  .stack-center{display:flex;flex-direction:column;align-items:center;}
+
+  /* right rail cards */
+  .right-rail{display:flex;flex-direction:column;gap:16px;}
+  .rail-card .node-body div{margin-bottom:2px;}
+
+  .grid-main{display:grid;grid-template-columns:1fr 320px;gap:26px;align-items:start;}
+
+  /* ---------- flow deep dive ---------- */
+  .section-heading{
+    display:flex;align-items:baseline;gap:12px;margin:64px 0 22px;
+  }
+  .section-heading h2{font-size:20px;margin:0;color:#f8fafc;font-weight:800;letter-spacing:-0.01em;}
+  .section-heading .tag{font-size:11px;}
+
+  .flow-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+  .flow-card{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:22px;}
+  .flow-card.wide{grid-column:1 / -1;}
+  .flow-title{display:flex;align-items:center;gap:10px;margin-bottom:4px;}
+  .flow-route{
+    font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:var(--teal);
+    background:rgba(94,234,212,0.08);padding:3px 10px;border-radius:6px;
+  }
+  .flow-desc{font-size:12.5px;color:var(--text-dim);margin:8px 0 16px;line-height:1.55;}
+  .steps{list-style:none;margin:0;padding:0;counter-reset:step;}
+  .steps li{
+    counter-increment:step;position:relative;padding:0 0 16px 32px;
+    font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.65;color:#cbd5e1;
+    border-left:1.5px solid var(--line-soft);margin-left:11px;
+  }
+  .steps li:last-child{border-left:1.5px solid transparent;padding-bottom:0;}
+  .steps li::before{
+    counter-content:counter(step);
+    content:counter(step);
+    position:absolute;left:-11px;top:0;width:22px;height:22px;border-radius:50%;
+    background:var(--panel-2);border:1.5px solid var(--teal-dim);color:var(--teal);
+    font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .steps b{color:#f1f5f9;}
+  .steps .sg{color:var(--orange);}
+  .steps .sc{color:var(--purple);}
+
+  /* SG table */
+  table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:12px;}
+  th{
+    text-align:left;color:var(--text-faint);font-weight:600;font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;padding:10px 14px;border-bottom:1px solid var(--line);
+  }
+  td{padding:12px 14px;border-bottom:1px solid var(--line-soft);color:#cbd5e1;vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td.legacy{color:var(--text-faint);}
+  .pill-live{color:var(--teal);}
+  .pill-legacy{color:var(--text-faint);}
+
+  /* notes */
+  .notes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+  .note-card{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:18px 20px;}
+  .note-card h3{margin:0 0 8px;font-size:13px;color:#f1f5f9;}
+  .note-card p{margin:0;font-size:12px;line-height:1.6;color:var(--text-dim);}
+
+  .legend{display:flex;gap:22px;flex-wrap:wrap;margin-top:18px;}
+  .legend-item{display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);}
+  .swatch{width:22px;height:2px;}
+
+  footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-faint);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">SYSTEM ARCHITECTURE</div>
+  <h1>Achievement Tracker on AWS — ECS Fargate, no ALB</h1>
+  <p class="subtitle">
+    Two React frontends (<span class="mono">frontend-add</span>, <span class="mono">frontend-list</span>), a FastAPI
+    backend and PostgreSQL, all running as ECS Fargate tasks. A single Nginx Fargate task in a public subnet is the
+    only internet-facing resource — it terminates <span class="mono">:80</span> on its own public IP and does
+    path-based routing (<span class="mono">/app1/</span>, <span class="mono">/app2/</span>, <span class="mono">/api/</span>)
+    itself. No Application Load Balancer, no target groups. Everything else lives in private subnets and talks over
+    <b style="color:#cbd5e1">ECS Service Connect</b> (namespace <span class="mono">achievement</span>).
+  </p>
+
+  <!-- ================= TOP ROW: local build vs browser ================= -->
+  <div class="top-row">
+    <div>
+      <div class="actor" style="margin-bottom:14px;">
+        <div class="actor-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>
+        </div>
+        <div>
+          <div class="actor-label">Local dev machine</div>
+          <div class="actor-sub">docker build · docker tag · docker push</div>
+        </div>
+      </div>
+      <div class="node buildbox">
+        <div class="node-head">
+          <div class="icon-chip orange">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </div>
+          <div class="node-title">Amazon ECR</div>
+        </div>
+        <div class="node-body">
+          290172088649.dkr.ecr.<b>ap-south-1</b>.amazonaws.com<br>
+          <span class="dim">repos:</span><br>
+          achievement-nginx&nbsp;&nbsp;achievement-backend<br>
+          achievement-frontend-add&nbsp;&nbsp;achievement-frontend-list<br>
+          achievement-postgres:16
+          <hr>
+          <span class="dim">legacy, unused by this deployment:</span> achievement-frontend
+        </div>
+      </div>
+    </div>
+
+    <div class="actor browserbox" style="flex-direction:row-reverse;">
+      <div class="actor-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+      </div>
+      <div>
+        <div class="actor-label">Browser user</div>
+        <div class="actor-sub">http://13.201.115.142/app1/</div>
+        <div class="actor-sub">http://13.201.115.142/app2/</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-stack" style="align-items:flex-end;">
+    <span class="arrow-label">HTTP · :80 · public IP only · no ALB · no DNS/ACM in this lab</span>
+  </div>
+
+  <!-- ================= AWS REGION / VPC ================= -->
+  <div class="region">
+    <div class="region-label">AWS REGION · ap-south-1 · account 290172088649</div>
+
+    <div class="vpc">
+      <div class="vpc-label">VPC · achievement-vpc · vpc-0f41fa568701c16d5 · 10.0.0.0/16 · IGW: achievement-igw</div>
+
+      <div class="grid-main">
+        <div>
+
+          <!-- PUBLIC SUBNETS -->
+          <div class="subnet-block">
+            <div class="subnet-label">Public subnets · achievement-public-a / -b</div>
+            <div class="center-row">
+              <div class="node accent nginx-box">
+                <div class="node-head">
+                  <div class="icon-chip">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="2" y1="9" x2="22" y2="9"/></svg>
+                  </div>
+                  <div class="node-title">nginx · ECS service <span style="color:var(--teal)">achievement-nginx</span></div>
+                </div>
+                <div class="node-body">
+                  Fargate task &middot; <b>public IP 13.201.115.142</b><br>
+                  listen <b>:80</b> &middot; image achievement-nginx:latest<br>
+                  SG: <b style="color:var(--orange)">achievement-alb-sg</b> — 80 from 0.0.0.0/0<br>
+                  <span class="dim">(name is historical — no ALB exists; this SG now guards the Nginx task itself)</span>
+                  <hr>
+                  <span class="dim">server{} location blocks:</span><br>
+                  /app1/ → proxy_pass frontend_add/ &nbsp;<span class="dim">(frontend-add:80)</span><br>
+                  /app2/ → proxy_pass frontend_list/ &nbsp;<span class="dim">(frontend-list:80)</span><br>
+                  /api/  → proxy_pass backend/ &nbsp;<span class="dim">(backend:8000)</span><br>
+                  <span class="dim">upstream hostnames resolved via Service Connect</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="vline" style="height:34px;"></div>
+          <div class="branch-bar"></div>
+
+          <!-- BRANCH -->
+          <div class="branch-cols">
+            <div class="branch-col">
+              <div class="branch-stub"></div>
+              <div class="branch-pill">/app1/</div>
+              <div class="node" style="width:100%;">
+                <div class="node-head">
+                  <div class="icon-chip purple">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+                  </div>
+                  <div class="node-title">frontend-add</div>
+                </div>
+                <div class="node-body">
+                  React (Vite base <b>/app1/</b>) served by its own nginx:alpine, port <b>80</b><br>
+                  SG: <b style="color:var(--orange)">achievement-frontend-sg</b> — 80 from achievement-alb-sg<br>
+                  Service Connect alias: <b class="mono" style="color:var(--purple)">frontend-add</b>*<br>
+                  <hr>
+                  its own location /api/ →<br>proxy_pass <b>backend:8000</b>/
+                </div>
+              </div>
+            </div>
+
+            <div class="branch-col">
+              <div class="branch-stub"></div>
+              <div class="branch-pill">/app2/</div>
+              <div class="node" style="width:100%;">
+                <div class="node-head">
+                  <div class="icon-chip purple">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+                  </div>
+                  <div class="node-title">frontend-list</div>
+                </div>
+                <div class="node-body">
+                  React (Vite base <b>/app2/</b>) served by its own nginx:alpine, port <b>80</b><br>
+                  SG: <b style="color:var(--orange)">achievement-frontend-sg</b> — 80 from achievement-alb-sg<br>
+                  Service Connect alias: <b class="mono" style="color:var(--purple)">frontend-list</b>*<br>
+                  <hr>
+                  its own location /api/ →<br>proxy_pass <b>backend:8000</b>/
+                </div>
+              </div>
+            </div>
+
+            <div class="branch-col">
+              <div class="branch-stub"></div>
+              <div class="branch-pill">/api/</div>
+              <div class="passthrough">
+                <div class="vline"></div>
+                <div class="tagnote">bypasses both frontends — used for direct API testing (e.g. the curl checks), not called by the React apps</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="converge-wrap">
+            <div class="branch-bar" style="margin-top:6px;"></div>
+            <div class="vline" style="height:30px;"></div>
+          </div>
+
+          <!-- BACKEND -->
+          <div class="backend-row">
+            <div class="node accent backend-box">
+              <div class="node-head">
+                <div class="icon-chip">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="16" r="1"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                </div>
+                <div class="node-title">backend · ECS service <span style="color:var(--teal)">achievement-backend</span></div>
+              </div>
+              <div class="node-body">
+                FastAPI (uvicorn), Fargate task &middot; private, no public IP<br>
+                task-def <b>achievement-backend:1</b> &middot; 0.25 vCPU / 0.5 GB<br>
+                listen <b>:8000</b> &middot; subnet achievement-private-app-a<br>
+                SG: <b style="color:var(--orange)">achievement-backend-sg</b> — 8000 from achievement-alb-sg <span class="dim">and</span> from achievement-frontend-sg<br>
+                Service Connect alias: <b class="mono" style="color:var(--purple)">backend</b> (namespace <b>achievement</b>)<br>
+                env: <span class="dim">DATABASE_URL=postgresql://postgres:postgres@</span><b>db:5432</b><span class="dim">/achievements</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack-center">
+            <div class="arrow-stack">
+              <div class="vline" style="height:32px;"></div>
+              <span class="arrow-label">Service Connect · db:5432</span>
+            </div>
+
+            <div class="node accent" style="width:380px;">
+              <div class="node-head">
+                <div class="icon-chip">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+                </div>
+                <div class="node-title">postgres · ECS service <span style="color:var(--teal)">achievement-postgres</span></div>
+              </div>
+              <div class="node-body">
+                Fargate task &middot; private, no public IP<br>
+                task-def <b>achievement-postgres:4</b> &middot; 0.25 vCPU / 0.5 GB<br>
+                listen <b>:5432</b> &middot; subnet achievement-private-app-a<br>
+                SG: <b style="color:var(--orange)">achievement-rds-sg</b> — 5432 from achievement-backend-sg<br>
+                <span class="dim">("rds" is historical — this is Postgres-on-Fargate, not RDS)</span><br>
+                Service Connect alias: <b class="mono" style="color:var(--purple)">db</b><br>
+                POSTGRES_DB=achievements &middot; volume: postgres-data (EFS)
+              </div>
+            </div>
+
+            <div class="arrow-stack">
+              <div class="vline" style="height:30px;"></div>
+              <span class="arrow-label">NFS · :2049 · achievement-efs-sg</span>
+            </div>
+
+            <div class="node" style="width:380px;">
+              <div class="node-head">
+                <div class="icon-chip gray">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </div>
+                <div class="node-title">EFS · fs-08f6d88577d9eec79</div>
+              </div>
+              <div class="node-body">
+                access point <b>achievement-postgres-ap</b> (fsap-04d70df2ee490c598)<br>
+                root dir <b>/postgres</b> &middot; POSIX 999:999 &middot; mode 700<br>
+                mount targets: ap-south-1a (subnet-0a5277cf525cc83aa) &amp; ap-south-1b (subnet-0906ef57b2ed36e85)<br>
+                encryption in transit: enabled
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RIGHT RAIL -->
+        <div class="right-rail">
+          <div class="node rail-card">
+            <div class="node-head">
+              <div class="icon-chip gray">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg>
+              </div>
+              <div class="node-title">Interface VPC endpoints</div>
+            </div>
+            <div class="node-body">
+              <div>achievement-ecr-api → com.amazonaws.ap-south-1.ecr.api</div>
+              <div>achievement-ecr-dkr → com.amazonaws.ap-south-1.ecr.dkr</div>
+              <div>achievement-cloudwatch-logs → ...logs</div>
+              <div class="dim">all 3: private-app-a subnet, private DNS on</div>
+              <hr>
+              SG: <b style="color:var(--orange)">achievement-vpce-sg</b> — 443 from<br>
+              frontend-sg, backend-sg, rds-sg
+            </div>
+          </div>
+
+          <div class="node rail-card">
+            <div class="node-head">
+              <div class="icon-chip gray">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
+              </div>
+              <div class="node-title">Gateway endpoint</div>
+            </div>
+            <div class="node-body">
+              achievement-s3 → com.amazonaws.ap-south-1.s3<br>
+              attached to <b>achievement-private-rt</b> (rtb-0e6a77f451789d790)<br>
+              <span class="dim">covers all 4 private subnets — used for ECR image layer pulls (ECR backs onto S3)</span>
+            </div>
+          </div>
+
+          <div class="node rail-card">
+            <div class="node-head">
+              <div class="icon-chip gray">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>
+              </div>
+              <div class="node-title">CloudWatch Logs</div>
+            </div>
+            <div class="node-body">
+              awslogs driver on all 4 task definitions<br>
+              reached via achievement-cloudwatch-logs VPC endpoint (private tasks never hit the public internet)
+            </div>
+          </div>
+
+          <div class="node rail-card">
+            <div class="node-head">
+              <div class="icon-chip gray">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>
+              </div>
+              <div class="node-title">ECS cluster</div>
+            </div>
+            <div class="node-body">
+              achievement-cluster (active)<br>
+              Service Connect namespace: <b style="color:var(--purple)">achievement</b><br>
+              4 live services: nginx, backend, postgres,<br>frontend-add, frontend-list
+              <hr>
+              <span class="dim">legacy, not part of this flow:</span><br>
+              <span class="dim">old achievement-frontend service (mixed FE)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:var(--teal-dim)"></span> live request / data path</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--orange)"></span> build &amp; push path</div>
+      <div class="legend-item"><span class="swatch" style="border-top:2px dashed rgba(148,163,184,0.5)"></span> pass-through / no dedicated hop</div>
+      <div class="legend-item" style="color:var(--purple)">* inferred: not explicitly logged, but required for the nginx.conf hostnames to resolve inside ECS — consistent with the documented backend/db Service Connect pattern</div>
+    </div>
+  </div>
+
+  <!-- ================= REQUEST FLOW DEEP DIVE ================= -->
+  <div class="section-heading">
+    <h2>Request flow — what actually happens when a browser hits each path</h2>
+  </div>
+
+  <div class="flow-cards">
+
+    <div class="flow-card">
+      <div class="flow-title"><span class="flow-route">GET /app1/</span></div>
+      <div class="flow-desc">Loading the Add-Achievement page — static HTML/JS/CSS, no database involved.</div>
+      <ol class="steps">
+        <li>Browser sends <b>GET /app1/</b> to <b>13.201.115.142:80</b>.</li>
+        <li>Ingress hits <span class="sg">achievement-alb-sg</span> (80 from 0.0.0.0/0) → reaches the <b>nginx</b> task.</li>
+        <li>Main nginx matches <b>location /app1/</b> → <b>proxy_pass http://frontend_add/</b>, resolved via <span class="sc">Service Connect</span> to the frontend-add task.</li>
+        <li>Traffic to frontend-add checked against <span class="sg">achievement-frontend-sg</span> (80 from alb-sg).</li>
+        <li>frontend-add's own nginx matches <b>location /</b> → <b>try_files</b> → serves <b>index.html</b> built with Vite <b>base:"/app1/"</b>, so asset URLs are already <b>/app1/assets/...</b>.</li>
+        <li>Browser then requests those assets — same route, same two hops, served straight from the frontend-add container's static files.</li>
+      </ol>
+    </div>
+
+    <div class="flow-card">
+      <div class="flow-title"><span class="flow-route">POST /app1/api/achievements</span></div>
+      <div class="flow-desc">The React app calling its API — this is the double-proxy hop, the important one.</div>
+      <ol class="steps">
+        <li>App.jsx calls <b>axios.post(`/app1/api/achievements`)</b> — browser sends it to <b>13.201.115.142:80</b>.</li>
+        <li>Main nginx still matches the broad <b>location /app1/</b> prefix (it has no more specific /app1/api rule) → forwards the whole path to <b>frontend-add:80</b>.</li>
+        <li>Inside the frontend-add container, its own nginx now sees <b>/api/achievements</b> and matches <b>its</b> <b>location /api/</b> → <b>proxy_pass http://backend:8000/</b>.</li>
+        <li><span class="sc">Service Connect</span> resolves <b>backend</b> to the backend task's private IP; SG check: <span class="sg">achievement-backend-sg</span> allows 8000 from <span class="sg">achievement-frontend-sg</span>.</li>
+        <li>FastAPI backend handles the POST, writes to Postgres via <b>DATABASE_URL=...@db:5432/achievements</b> — <span class="sc">Service Connect</span> alias <b>db</b>, SG <span class="sg">achievement-rds-sg</span> allows 5432 from backend-sg.</li>
+        <li>Response flows straight back up the same two hops (backend → frontend-add nginx → main nginx → browser).</li>
+      </ol>
+    </div>
+
+    <div class="flow-card">
+      <div class="flow-title"><span class="flow-route">GET /api/achievements</span></div>
+      <div class="flow-desc">Direct top-level API call (what the curl verification test used) — bypasses both frontends entirely.</div>
+      <ol class="steps">
+        <li>Client sends <b>GET /api/achievements</b> straight to <b>13.201.115.142:80</b>.</li>
+        <li>Main nginx matches its <b>own</b> <b>location /api/</b> block → <b>proxy_pass http://backend/</b> directly — <b>frontend-add and frontend-list are never touched</b>.</li>
+        <li><span class="sc">Service Connect</span> alias <b>backend:8000</b>, SG check: <span class="sg">achievement-backend-sg</span> allows 8000 from <span class="sg">achievement-alb-sg</span> (this is the rule that exists specifically for this direct path).</li>
+        <li>Backend queries Postgres over <b>db:5432</b>, returns JSON (this is the call that returned the achievement record with id 1 during verification).</li>
+        <li>Response returns through nginx to the client, tagged <b>Server: nginx/1.31.3</b>.</li>
+      </ol>
+      <div class="flow-desc" style="margin-top:14px;margin-bottom:0;">This route exists as a convenience/health-check path; the React apps only ever call <span class="mono" style="color:#cbd5e1">/app1/api/...</span> or <span class="mono" style="color:#cbd5e1">/app2/api/...</span>, which go through step 2 of the flow above (the double-hop).</div>
+    </div>
+
+  </div>
+
+  <!-- ================= SECURITY GROUPS TABLE ================= -->
+  <div class="section-heading">
+    <h2>Security groups — old names, current job</h2>
+    <span class="tag">names were kept from the earlier ALB / RDS design and were not renamed</span>
+  </div>
+
+  <div class="panel" style="padding:6px 8px;overflow:auto;">
+    <table>
+      <tr>
+        <th>Security group</th>
+        <th>Historical name suggests</th>
+        <th>Actual current role</th>
+        <th>Inbound rule</th>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-alb-sg</td>
+        <td class="legacy">an Application Load Balancer</td>
+        <td>Attached to the <b>nginx</b> Fargate task itself</td>
+        <td>TCP 80 from 0.0.0.0/0</td>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-frontend-sg</td>
+        <td class="legacy">generic frontend tier</td>
+        <td>frontend-add &amp; frontend-list tasks</td>
+        <td>TCP 80 from achievement-alb-sg</td>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-backend-sg</td>
+        <td class="legacy">generic backend tier</td>
+        <td>backend (FastAPI) task</td>
+        <td>TCP 8000 from achievement-alb-sg <b>and</b> from achievement-frontend-sg</td>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-rds-sg</td>
+        <td class="legacy">an RDS database</td>
+        <td>Postgres-on-Fargate task (not RDS)</td>
+        <td>TCP 5432 from achievement-backend-sg</td>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-efs-sg</td>
+        <td class="legacy">—</td>
+        <td>EFS mount targets (Postgres data volume)</td>
+        <td>TCP 2049 from achievement-rds-sg</td>
+      </tr>
+      <tr>
+        <td class="pill-live">achievement-vpce-sg</td>
+        <td class="legacy">—</td>
+        <td>Interface VPC endpoints (ECR api/dkr, CloudWatch Logs)</td>
+        <td>TCP 443 from frontend-sg, backend-sg, rds-sg</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================= NOTES ================= -->
+  <div class="section-heading">
+    <h2>Why it's built this way</h2>
+  </div>
+  <div class="notes">
+    <div class="note-card">
+      <h3>No ALB, by requirement</h3>
+      <p>Routing that would normally be an ALB listener + path-based rules + target groups is done entirely by nginx's own <span class="mono" style="color:#cbd5e1">location</span> blocks. The nginx ECS service shows "Load balancing (0)" — it isn't attached to any ELB resource at all. The public IP on the Fargate task is the only entry point.</p>
+    </div>
+    <div class="note-card">
+      <h3>Public vs. private split</h3>
+      <p>Only the nginx task sits in a public subnet with a public IP and an internet-route security group. Frontends, backend, and Postgres are all in private subnets with no public IP — they can only be reached from inside the VPC, and only over the specific ports their upstream neighbor needs.</p>
+    </div>
+    <div class="note-card">
+      <h3>Service Connect over Compose DNS</h3>
+      <p>Docker Compose's automatic service-name DNS (<span class="mono" style="color:#cbd5e1">backend</span>, <span class="mono" style="color:#cbd5e1">db</span>) doesn't exist in ECS by default, so the <span class="mono" style="color:#cbd5e1">achievement</span> Service Connect namespace recreates the same short hostnames, letting the exact same nginx.conf and DATABASE_URL from the Compose lab work unchanged on Fargate.</p>
+    </div>
+  </div>
+
+  <footer>
+    achievement-cluster · ap-south-1 · account 290172088649 · generated from current deployed state, no new AWS resources implied by this diagram
+  </footer>
+
+</div>
+</body>
+</html>
