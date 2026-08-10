@@ -1,1094 +1,1318 @@
-# 🏆 Achievement Tracker — Docker Compose
+# Achievement Tracker — AWS ECS Fargate Deployment
 
-A containerized **Achievement Tracker** application built to demonstrate multi-container application architecture, Docker networking, persistent storage, reverse proxying, service discovery, and frontend/backend communication using **Docker Compose**.
-
-The project consists of two separate React frontend applications, a FastAPI backend, PostgreSQL database, and a centralized Nginx reverse proxy.
-
-> **Project focus:** Docker, Docker Compose, containerization, networking, volumes, service discovery, reverse proxying, and multi-container application architecture.
+A containerized **Achievement Tracker** application deployed on **Amazon ECS using AWS Fargate**, featuring two independent React frontends, a FastAPI backend, PostgreSQL, Nginx reverse proxy, ECS Service Connect, Amazon EFS persistence, Amazon ECR, private networking, and **context-based routing without an Application Load Balancer (ALB)**.
 
 ---
 
-## 📌 Table of Contents
+## Table of Contents
 
-* [Overview](#-overview)
-* [Architecture](#-architecture)
-* [Application Components](#-application-components)
-* [Technology Stack](#-technology-stack)
-* [Project Structure](#-project-structure)
-* [How the Application Works](#-how-the-application-works)
-* [Docker Compose Services](#-docker-compose-services)
-* [Networking](#-networking)
-* [Nginx Reverse Proxy](#-nginx-reverse-proxy)
-* [Frontend Applications](#-frontend-applications)
-* [Backend API](#-backend-api)
-* [PostgreSQL Database](#-postgresql-database)
-* [Persistent Storage](#-persistent-storage)
-* [Container Communication](#-container-communication)
-* [Routing](#-routing)
-* [Getting Started](#-getting-started)
-* [Screenshots](#-screenshots)
-* [Architecture Diagram](#-architecture-diagram)
-* [Learning Outcomes](#-learning-outcomes)
-* [Future Improvements](#-future-improvements)
+* [Overview](#overview)
+* [Project Objective](#project-objective)
+* [Architecture](#architecture)
+* [Application Architecture](#application-architecture)
+* [Container Architecture](#container-architecture)
+* [Technology Stack](#technology-stack)
+* [Repository Structure](#repository-structure)
+* [Application Components](#application-components)
+* [Docker Implementation](#docker-implementation)
+* [AWS Infrastructure](#aws-infrastructure)
 
----
-
-# 🚀 Overview
-
-**Achievement Tracker** is a small full-stack web application designed as a practical Docker and Docker Compose laboratory.
-
-The application allows users to:
-
-* Add achievements
-* Store achievements in PostgreSQL
-* View stored achievements
-* Refresh the achievement list
-* Access multiple frontend applications through different URL paths
-* Communicate with the backend through Nginx
-* Persist database data using a Docker named volume
-
-The application is intentionally split into multiple containers to demonstrate how a real multi-service application can be containerized and connected.
+  * [VPC and Networking](#vpc-and-networking)
+  * [Security Groups](#security-groups)
+  * [VPC Endpoints](#vpc-endpoints)
+  * [Amazon ECR](#amazon-ecr)
+  * [Amazon ECS and Fargate](#amazon-ecs-and-fargate)
+  * [ECS Service Connect](#ecs-service-connect)
+  * [Amazon EFS](#amazon-efs)
+* [Nginx Context-Based Routing](#nginx-context-based-routing)
+* [Request Flow](#request-flow)
+* [Deployment Approach](#deployment-approach)
+* [Verification and Testing](#verification-and-testing)
+* [Screenshots](#screenshots)
+* [Key Design Decisions](#key-design-decisions)
+* [Challenges and Solutions](#challenges-and-solutions)
+* [Security Considerations](#security-considerations)
+* [What This Project Demonstrates](#what-this-project-demonstrates)
+* [Future Improvements](#future-improvements)
+* [Conclusion](#conclusion)
 
 ---
 
-# 🏗 Architecture
+# Overview
 
-The application consists of **five containers**:
+The **Achievement Tracker** is a containerized web application designed to demonstrate practical Docker, networking, and AWS container orchestration concepts.
 
-1. **Nginx Reverse Proxy**
-2. **Frontend — Add Achievement**
-3. **Frontend — List Achievements**
-4. **FastAPI Backend**
-5. **PostgreSQL Database**
+The project was developed incrementally, starting with a Docker-based application and then moving the workload to **Amazon ECS Fargate**.
 
-All containers communicate through a dedicated Docker bridge network.
+The final architecture consists of **five containers/services**:
+
+1. **Nginx** — public reverse proxy and context-based router
+2. **Frontend Add** — React application for adding achievements
+3. **Frontend List** — React application for viewing achievements
+4. **Backend** — FastAPI REST API
+5. **PostgreSQL** — relational database
+
+The application is deployed on ECS Fargate **without an Application Load Balancer**. Instead, Nginx acts as the public entry point and performs path-based routing.
+
+---
+
+# Project Objective
+
+The primary objective was to take a multi-container Docker application and deploy it as a cloud-native container workload using **Amazon ECS with AWS Fargate**.
+
+The project specifically demonstrates:
+
+* Containerization with Docker
+* Docker Compose-based local orchestration
+* Multiple independent frontend applications
+* FastAPI backend development
+* PostgreSQL database deployment
+* Nginx reverse proxy configuration
+* AWS ECS Fargate
+* Amazon ECR
+* ECS Service Connect
+* Amazon EFS
+* VPC networking
+* Private subnets
+* Security Groups
+* VPC endpoints
+* Context/path-based routing
+* Persistent database storage
+* Deployment without an ALB
+
+A key requirement was to preserve the routing concept from the Docker environment while moving the application to ECS Fargate.
+
+---
+
+# Architecture
+
+The complete AWS architecture is documented in the included architecture diagram:
+
+**[`docs/architecture.html`](docs/architecture.html)**
+
+The architecture can be viewed directly from the repository by opening the HTML file in a browser.
+
+The high-level architecture is:
 
 ```text
-                         Browser
+                         Internet
                             │
                             │ HTTP :80
                             ▼
-                 ┌──────────────────────┐
-                 │   Nginx Reverse      │
-                 │       Proxy          │
-                 │ achievement-nginx    │
-                 └──────────┬───────────┘
+                 ┌─────────────────────┐
+                 │    Nginx Fargate    │
+                 │   Public Subnet     │
+                 │       Port 80       │
+                 └──────────┬──────────┘
                             │
-              ┌─────────────┼─────────────┐
-              │             │             │
-              ▼             ▼             ▼
-         /app1/          /app2/          /api/
-              │             │             │
-              ▼             ▼             ▼
-     ┌─────────────┐ ┌─────────────┐ ┌──────────────┐
-     │ Frontend    │ │ Frontend    │ │   FastAPI    │
-     │ Add         │ │ List        │ │   Backend    │
-     │ React+Nginx │ │ React+Nginx │ │   :8000      │
-     └─────────────┘ └─────────────┘ └──────┬───────┘
-                                            │
-                                            │ PostgreSQL
-                                            ▼
-                                   ┌──────────────────┐
-                                   │   PostgreSQL 16  │
-                                   │      :5432       │
-                                   └────────┬─────────┘
-                                            │
-                                            ▼
-                                   ┌──────────────────┐
-                                   │ postgres_data    │
-                                   │ Docker Volume    │
-                                   └──────────────────┘
+                  Path-Based Routing
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+          /app1/         /app2/          /api/
+             │              │              │
+             ▼              ▼              ▼
+     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+     │ Frontend Add │ │ Frontend List│ │    Backend   │
+     │    React     │ │    React     │ │   FastAPI    │
+     │    :80       │ │    :80       │ │    :8000     │
+     └──────────────┘ └──────────────┘ └───────┬──────┘
+                                               │
+                                               │ :5432
+                                               ▼
+                                        ┌──────────────┐
+                                        │  PostgreSQL  │
+                                        │    :5432     │
+                                        └───────┬──────┘
+                                                │
+                                                │ Persistent Storage
+                                                ▼
+                                          ┌───────────┐
+                                          │    EFS    │
+                                          └───────────┘
 ```
 
-A more detailed interactive architecture diagram is available here:
 
-👉 [`docs/architecture.html`](./docs/architecture.html)
-
-The repository's architecture documentation is maintained separately so the system design can be inspected without needing to read the entire Compose configuration.
 
 ---
 
-# 🧩 Application Components
+# Application Architecture
 
-## 1. Nginx Reverse Proxy
-
-Container:
+The application is split into independent components.
 
 ```text
-achievement-nginx
+                     Achievement Tracker
+                             │
+            ┌────────────────┼────────────────┐
+            │                │                │
+            ▼                ▼                ▼
+      Frontend Add     Frontend List       Backend
+         React             React           FastAPI
+            │                │                │
+            └────────────────┴────────────────┘
+                             │
+                             ▼
+                         PostgreSQL
 ```
 
-Responsibilities:
+## Frontend Add
 
-* Acts as the single public entry point
-* Listens on host port `80`
-* Routes traffic based on URL paths
-* Forwards API requests to FastAPI
-* Forwards `/app1/` requests to the Add frontend
-* Forwards `/app2/` requests to the List frontend
+The first frontend provides the interface for adding new achievements.
 
-The Nginx container is the only application container exposed directly to the host.
+It is available through:
+
+```text
+/app1/
+```
+
+The frontend is built using React/Vite and served through Nginx.
+
+Screenshot:
+
+![Add Achievement Screen](docs/screenshots/add-screen.png)
 
 ---
 
-## 2. Add Achievement Frontend
+## Frontend List
 
-Container:
+The second frontend provides the interface for viewing stored achievements.
 
-```text
-achievement-frontend-add
-```
-
-Technology:
-
-* React
-* Vite
-* Axios
-* Nginx
-
-Purpose:
-
-Provides the interface for adding new achievements.
-
-Accessible through:
+It is available through:
 
 ```text
-http://localhost/app1/
+/app2/
 ```
+
+Screenshot:
+
+![Achievement List Screen](docs/screenshots/list-screen.png)
 
 ---
 
-## 3. List Achievement Frontend
+## Backend
 
-Container:
+The backend is implemented using **FastAPI**.
 
-```text
-achievement-frontend-list
-```
+It provides the API consumed by the frontend applications.
 
-Technology:
-
-* React
-* Vite
-* Axios
-* Nginx
-
-Purpose:
-
-Displays achievements stored in PostgreSQL.
-
-Accessible through:
-
-```text
-http://localhost/app2/
-```
-
-The list page retrieves data from the backend and supports refreshing the displayed achievements.
-
----
-
-## 4. FastAPI Backend
-
-Container:
-
-```text
-achievement-backend
-```
-
-Technology:
-
-* Python
-* FastAPI
-* Uvicorn
-* SQLAlchemy
-* PostgreSQL driver
-
-The backend provides the REST API used by both frontend applications.
-
-The backend listens internally on:
+The backend exposes port:
 
 ```text
 8000
 ```
 
-It is intentionally **not published directly to the host**.
-
-Instead, Nginx communicates with it through Docker's internal network.
-
----
-
-## 5. PostgreSQL Database
-
-Container:
+The primary API context is:
 
 ```text
-achievement-db
+/api/
 ```
 
-Image:
+For example:
 
 ```text
-postgres:16
+GET /api/achievements
 ```
 
-PostgreSQL stores the achievement records.
-
-The database is also kept internal to the Docker network rather than being exposed to the host.
-
----
-
-# 🛠 Technology Stack
-
-| Layer               | Technology            |
-| ------------------- | --------------------- |
-| Frontend            | React                 |
-| Frontend Build Tool | Vite                  |
-| HTTP Client         | Axios                 |
-| Frontend Web Server | Nginx                 |
-| Backend             | FastAPI               |
-| Backend Server      | Uvicorn               |
-| ORM                 | SQLAlchemy            |
-| Database            | PostgreSQL 16         |
-| Containerization    | Docker                |
-| Orchestration       | Docker Compose        |
-| Reverse Proxy       | Nginx                 |
-| Network             | Docker Bridge Network |
-| Storage             | Docker Named Volume   |
-
----
-
-# 📁 Project Structure
+The backend communicates internally with PostgreSQL over:
 
 ```text
-achievement-tracker-docker-compose/
-│
-├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       └── ...
-│
-├── frontend/
-│   └── ...
-│
-├── frontend-add/
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── index.html
-│   └── src/
-│       ├── App.jsx
-│       ├── App.css
-│       └── main.jsx
-│
-├── frontend-list/
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── index.html
-│   └── src/
-│       ├── App.jsx
-│       ├── App.css
-│       └── main.jsx
-│
-├── nginx/
-│   └── nginx.conf
-│
-├── docs/
-│   ├── architecture.html
-│   └── screenshots/
-│       ├── add-screen.png
-│       ├── containers.png
-│       ├── list-screen.png
-│       ├── network.png
-│       ├── nginx.png
-│       └── volume.png
-│
-├── docker-compose.yml
-├── .gitignore
-└── README.md
+5432
 ```
 
 ---
 
-# 🔄 How the Application Works
+## PostgreSQL
 
-The overall request flow is:
+PostgreSQL provides persistent relational storage for the application.
+
+The database runs as an ECS Fargate workload and uses Amazon EFS for persistent storage.
+
+---
+
+## Nginx
+
+Nginx is the public-facing component of the application.
+
+It:
+
+* Receives HTTP traffic on port 80
+* Routes requests based on URL context
+* Sends frontend requests to the appropriate frontend service
+* Sends API requests to the FastAPI backend
+* Acts as the reverse proxy
+* Removes the need for an ALB for this deployment
+
+---
+
+# Container Architecture
+
+The final deployment consists of five application containers/services:
+
+| Component     | Technology           | Port | Purpose                          |
+| ------------- | -------------------- | ---: | -------------------------------- |
+| Nginx         | Nginx Alpine         |   80 | Public reverse proxy and routing |
+| Frontend Add  | React + Vite + Nginx |   80 | Add achievements                 |
+| Frontend List | React + Vite + Nginx |   80 | Display achievements             |
+| Backend       | FastAPI              | 8000 | REST API                         |
+| Database      | PostgreSQL 16        | 5432 | Persistent data storage          |
+
+The ECS cluster and deployed services are shown in:
+
+![ECS Cluster and Services](docs/screenshots/cluster-and-services.png)
+
+---
+
+# Technology Stack
+
+## Application
+
+* React
+* Vite
+* Axios
+* FastAPI
+* SQLAlchemy
+* PostgreSQL
+
+## Containerization
+
+* Docker
+* Docker Compose
+* Docker multi-stage builds
+* Nginx
+
+## AWS
+
+* Amazon ECS
+* AWS Fargate
+* Amazon ECR
+* Amazon EFS
+* Amazon VPC
+* Security Groups
+* VPC Endpoints
+* ECS Service Connect
+* CloudWatch Logs
+
+---
+
+# Application Components
+
+## Frontend Add
+
+The Add frontend is a standalone React application.
+
+Its Vite configuration uses:
 
 ```text
-User
-  │
-  ▼
-Browser
-  │
-  │ http://localhost/
-  ▼
-Nginx Reverse Proxy
-  │
-  ├── /app1/ ──────────► Add Frontend
-  │
-  ├── /app2/ ──────────► List Frontend
-  │
-  └── /api/ ───────────► FastAPI Backend
-                              │
-                              ▼
-                         PostgreSQL
-                              │
-                              ▼
-                       postgres_data
+/app1/
 ```
 
-### Adding an achievement
+as its base path.
+
+The frontend communicates with the backend through:
 
 ```text
-User
-  ↓
-Add Frontend
-  ↓
-Nginx /api/
-  ↓
-FastAPI
-  ↓
-SQLAlchemy
-  ↓
-PostgreSQL
-  ↓
-Achievement stored
-```
-
-### Viewing achievements
-
-```text
-User
-  ↓
-List Frontend
-  ↓
-Nginx /api/
-  ↓
-FastAPI
-  ↓
-PostgreSQL
-  ↓
-Achievements returned
-  ↓
-React renders achievement cards
+/app1/api/
 ```
 
 ---
 
-# 🐳 Docker Compose Services
+## Frontend List
 
-The project uses Docker Compose to define and run all services together.
+The List frontend is a separate React application.
 
-The Compose file defines:
+Its Vite configuration uses:
 
 ```text
-nginx
+/app2/
+```
+
+as its base path.
+
+The frontend communicates with the backend through:
+
+```text
+/app2/api/
+```
+
+---
+
+## Backend API
+
+The FastAPI backend provides the application API.
+
+The API is exposed through Nginx using:
+
+```text
+/api/
+```
+
+The backend communicates with PostgreSQL internally.
+
+---
+
+# Docker Implementation
+
+Before deploying to AWS, the complete application was tested as a multi-container Docker Compose application.
+
+The local architecture consisted of:
+
+```text
+Docker Compose
+│
+├── nginx
+├── frontend-add
+├── frontend-list
+├── backend
+└── db
+```
+
+Docker Compose provided the local service network and allowed the individual containers to communicate using service names.
+
+For example:
+
+```text
 frontend-add
 frontend-list
 backend
 db
 ```
 
-The Compose configuration also defines:
-
-```text
-achievement-network
-postgres_data
-```
-
-The current Compose configuration uses a dedicated bridge network and a named PostgreSQL volume.
+The Docker implementation served as the foundation for the ECS deployment.
 
 ---
 
-## Nginx Service
+# Docker Multi-Stage Builds
 
-```yaml
-nginx:
-  image: nginx:alpine
-  container_name: achievement-nginx
-  ports:
-    - "80:80"
-```
+The React frontends use multi-stage Dockerfiles.
 
-Nginx is the only container whose port is published to the host.
+The first stage uses Node.js to build the React application.
 
-```text
-Host :80
-   ↓
-Container :80
-```
-
----
-
-## Frontend Services
-
-Both frontend applications are built from their own Dockerfiles.
-
-```text
-frontend-add
-frontend-list
-```
-
-They use a multi-stage Docker build:
-
-```text
-Node.js build stage
-       ↓
-npm install
-       ↓
-npm run build
-       ↓
-React production files
-       ↓
-Nginx Alpine production stage
-```
-
-This keeps the final frontend containers focused on serving production static files rather than carrying the entire Node.js build environment.
-
----
-
-## Backend Service
-
-The backend is built from:
-
-```text
-./backend
-```
-
-It exposes port `8000` internally:
-
-```yaml
-expose:
-  - "8000"
-```
-
-It is not mapped like:
-
-```yaml
-ports:
-  - "8000:8000"
-```
-
-This is intentional.
-
-The backend is meant to be reached through Nginx and Docker's internal networking.
-
----
-
-## Database Service
-
-PostgreSQL uses:
-
-```text
-postgres:16
-```
-
-The database exposes port `5432` internally and stores its data in the named volume:
-
-```text
-postgres_data
-```
-
-A PostgreSQL healthcheck is also configured using:
-
-```text
-pg_isready
-```
-
-The backend depends on the database becoming healthy before starting.
-
----
-
-# 🌐 Networking
-
-Docker Compose creates a dedicated bridge network:
-
-```text
-achievement-network
-```
-
-All application containers join this network.
+The second stage uses Nginx to serve the generated production assets.
 
 Conceptually:
 
 ```text
-achievement-network
-│
-├── achievement-nginx
-├── achievement-frontend-add
-├── achievement-frontend-list
-├── achievement-backend
-└── achievement-db
+Node.js
+   │
+   ├── Install dependencies
+   ├── Copy source
+   └── npm run build
+           │
+           ▼
+       /dist
+           │
+           ▼
+       Nginx Alpine
+           │
+           ▼
+      Production image
 ```
 
-Containers can communicate with one another using Docker Compose service names instead of hard-coded IP addresses.
-
-For example:
-
-```text
-backend:8000
-```
-
-and:
-
-```text
-db:5432
-```
-
-This is preferable to using container IP addresses because Docker service discovery automatically resolves service names within the Compose network.
+This keeps the production image focused on serving the compiled application rather than requiring Node.js at runtime.
 
 ---
 
-# 🔀 Nginx Reverse Proxy
+# AWS Infrastructure
 
-Nginx performs path-based routing.
+## VPC and Networking
 
-## API
+The application is deployed inside a dedicated VPC.
+
+The infrastructure includes public and private subnet resources.
+
+The VPC design separates:
+
+* Public entry-point resources
+* Application services
+* Database resources
+* AWS service connectivity
+
+The VPC resource map is shown below:
+
+![VPC Resource Map](docs/screenshots/vpc-resource-map.png)
+
+This separation allows internal services to remain private while exposing only the Nginx entry point.
+
+---
+
+# Security Groups
+
+Security Groups are used to control traffic between the different layers.
+
+The architecture follows a layered communication model:
 
 ```text
-/api/
+Internet
+   │
+   ▼
+Nginx
+   │
+   ├── Frontend Add
+   ├── Frontend List
+   └── Backend
+          │
+          ▼
+       PostgreSQL
+          │
+          ▼
+          EFS
 ```
 
-is forwarded to:
+The application services are not exposed directly to the public internet.
+
+The Nginx service is the public entry point.
+
+---
+
+# VPC Endpoints
+
+Because several ECS tasks operate in private networking, AWS service access is provided through VPC endpoints.
+
+The environment uses endpoints for services including:
+
+* Amazon ECR API
+* Amazon ECR Docker Registry
+* CloudWatch Logs
+* Amazon S3
+
+The configured endpoints are shown here:
+
+![VPC Endpoints](docs/screenshots/endpoints.png)
+
+This allows ECS workloads to communicate with required AWS services without relying on public internet access for those service interactions.
+
+---
+
+# Amazon ECR
+
+The application container images are stored in **Amazon Elastic Container Registry (ECR)**.
+
+The deployment uses separate repositories for the major application components:
 
 ```text
-backend:8000
-```
-
-Example:
-
-```text
-http://localhost/api/achievements
-```
-
-Internally:
-
-```text
-Browser
-   ↓
-Host :80
-   ↓
+achievement-backend
+achievement-frontend-add
+achievement-frontend-list
 achievement-nginx
-   ↓
-backend:8000
+achievement-postgres
+```
+
+The repositories are shown here:
+
+![Amazon ECR Repositories](docs/screenshots/ecr-repos.png)
+
+The general image flow is:
+
+```text
+Docker Build
+     │
+     ▼
+Local Docker Image
+     │
+     ▼
+Amazon ECR
+     │
+     ▼
+ECS Fargate
+     │
+     ▼
+Running Container
 ```
 
 ---
 
-## Add Application
+# Amazon ECS and Fargate
 
-```text
-/app1/
-```
+The application is deployed using **Amazon ECS with AWS Fargate**.
 
-routes to:
+Fargate removes the need to provision or manage EC2 instances for the ECS workloads.
 
-```text
-frontend-add:80
-```
-
-Example:
-
-```text
-http://localhost/app1/
-```
-
----
-
-## List Application
-
-```text
-/app2/
-```
-
-routes to:
-
-```text
-frontend-list:80
-```
-
-Example:
-
-```text
-http://localhost/app2/
-```
-
----
-
-# 🖥 Frontend Applications
-
-The project intentionally uses two separate frontend applications.
-
-### Add application
-
-```text
-/app1/
-```
-
-Used for entering new achievements.
-
-### List application
-
-```text
-/app2/
-```
-
-Used for displaying saved achievements.
-
-This demonstrates how multiple independent frontend services can coexist behind one reverse proxy.
-
----
-
-# 🔌 Backend API
-
-The backend exposes API endpoints used by the frontend applications.
-
-One of the main endpoints is:
-
-```text
-GET /achievements
-```
-
-which retrieves stored achievements.
-
-The frontend reaches the API through Nginx:
-
-```text
-/app2/api/achievements
-```
-
-and Nginx routes the request toward the backend.
-
-The backend itself remains internal to the Docker network.
-
----
-
-# 🗄 PostgreSQL Database
-
-PostgreSQL stores achievement information.
-
-The application connects to PostgreSQL using the Docker Compose service name:
-
-```text
-db
-```
-
-rather than:
-
-```text
-localhost
-```
-
-This distinction is important.
-
-Inside a container:
-
-```text
-localhost
-```
-
-means **that same container**.
-
-Therefore:
-
-```text
-backend → localhost:5432
-```
-
-would attempt to find PostgreSQL inside the backend container.
-
-Instead:
-
-```text
-backend → db:5432
-```
-
-means:
-
-```text
-backend container
-      ↓
-Docker DNS
-      ↓
-achievement-db
-      ↓
-PostgreSQL :5432
-```
-
----
-
-# 💾 Persistent Storage
-
-The PostgreSQL container uses a Docker named volume:
-
-```text
-postgres_data
-```
-
-mounted at:
-
-```text
-/var/lib/postgresql/data
-```
-
-The architecture is:
-
-```text
-PostgreSQL Container
-        │
-        ▼
-/var/lib/postgresql/data
-        │
-        ▼
-postgres_data
-        │
-        ▼
-Docker-managed persistent storage
-```
-
-This means database data is separated from the lifecycle of the PostgreSQL container.
-
-For example, removing and recreating the database container does not automatically remove the named volume.
-
----
-
-# 🔗 Container Communication
-
-The application demonstrates two different types of communication.
-
-### External communication
-
-The browser communicates with:
-
-```text
-localhost:80
-```
-
-through the Nginx container.
-
-### Internal communication
-
-Containers communicate through:
-
-```text
-achievement-network
-```
-
-using service names.
-
-Examples:
-
-```text
-nginx → backend:8000
-nginx → frontend-add:80
-nginx → frontend-list:80
-backend → db:5432
-```
-
-This provides service discovery without requiring manually assigned container IP addresses.
-
----
-
-# 🚦 Routing Table
-
-| Request                     | Destination        |
-| --------------------------- | ------------------ |
-| `/app1/`                    | `frontend-add:80`  |
-| `/app2/`                    | `frontend-list:80` |
-| `/api/`                     | `backend:8000`     |
-| Backend database connection | `db:5432`          |
-
----
-
-# ⚙️ Getting Started
-
-## Prerequisites
-
-Install:
-
-* Docker Desktop
-* Docker Compose
-* Git
-
-Verify Docker:
-
-```bash
-docker --version
-```
-
-Verify Docker Compose:
-
-```bash
-docker compose version
-```
-
----
-
-## 1. Clone the repository
-
-```bash
-git clone https://github.com/MalahimCh/achievement-tracker-docker-compose.git
-```
-
-```bash
-cd achievement-tracker-docker-compose
-```
-
----
-
-## 2. Configure environment variables
-
-The Compose configuration expects environment variables for the backend and database.
-
-Create the required environment file:
-
-```bash
-touch .env
-```
-
-Populate it with the required PostgreSQL configuration used by the application.
-
-> Do not commit real passwords, API keys, or other secrets to GitHub.
-
----
-
-## 3. Build and start the application
-
-Run:
-
-```bash
-docker compose up -d --build
-```
-
-Docker Compose will:
-
-1. Create the Docker network
-2. Build the backend image
-3. Build the Add frontend image
-4. Build the List frontend image
-5. Pull PostgreSQL
-6. Pull Nginx
-7. Create the PostgreSQL volume
-8. Start PostgreSQL
-9. Wait for the database healthcheck
-10. Start the backend
-11. Start both frontend containers
-12. Start Nginx
-
----
-
-# 🔍 Verify Containers
-
-Run:
-
-```bash
-docker compose ps
-```
-
-Expected services:
+The ECS cluster contains separate services for:
 
 ```text
 achievement-nginx
 achievement-frontend-add
 achievement-frontend-list
 achievement-backend
-achievement-db
+achievement-postgres
+```
+
+The cluster and service configuration are shown here:
+
+![ECS Cluster and Services](docs/screenshots/cluster-and-services.png)
+
+---
+
+# ECS Task Definitions
+
+Each workload has its own ECS task definition configuration.
+
+The task definitions define details such as:
+
+* Container image
+* CPU
+* Memory
+* Port mappings
+* Environment variables
+* Network configuration
+* Logging
+* Volumes where required
+
+The deployed task definitions are shown here:
+
+![ECS Task Definitions](docs/screenshots/task-definitions.png)
+
+The architecture uses the `awsvpc` networking mode so ECS tasks receive their own network interfaces and private IP addresses.
+
+---
+
+# ECS Service Connect
+
+ECS Service Connect is used for internal service-to-service communication.
+
+The ECS environment uses a Service Connect namespace:
+
+```text
+achievement
+```
+
+The namespace and service discovery configuration are shown here:
+
+![ECS Service Connect Namespace](docs/screenshots/namespace.png)
+
+Services can communicate using logical service names rather than hardcoded task IP addresses.
+
+For example:
+
+```text
+backend:8000
+db:5432
+```
+
+This is particularly important in Fargate because task IP addresses are not static.
+
+The internal communication model is:
+
+```text
+Nginx
+   │
+   ├── frontend-add
+   ├── frontend-list
+   └── backend:8000
+                    │
+                    ▼
+                  db:5432
+```
+
+Service Connect therefore provides a service-oriented communication layer between the ECS workloads.
+
+---
+
+# Amazon EFS
+
+PostgreSQL uses **Amazon Elastic File System (EFS)** for persistent storage.
+
+This separates the database's persistent data from the lifecycle of the Fargate task itself.
+
+The EFS configuration is shown here:
+
+![Amazon EFS](docs/screenshots/efs.png)
+
+The database architecture can be represented as:
+
+```text
+PostgreSQL Fargate Task
+        │
+        │ EFS Mount
+        ▼
+Amazon EFS
+        │
+        ▼
+Persistent Database Data
+```
+
+The EFS configuration includes an access point for the PostgreSQL workload.
+
+This ensures that the database's storage is not dependent solely on the ephemeral filesystem of a Fargate task.
+
+---
+
+# Nginx Context-Based Routing
+
+One of the main requirements of the deployment was to perform routing **without an Application Load Balancer**.
+
+Nginx is therefore deployed as the public entry point.
+
+The routing is based on URL paths.
+
+## Routing Table
+
+| Request Path | Destination     |
+| ------------ | --------------- |
+| `/app1/`     | Frontend Add    |
+| `/app2/`     | Frontend List   |
+| `/api/`      | FastAPI Backend |
+
+Conceptually:
+
+```text
+                    Nginx :80
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+       /app1/         /app2/         /api/
+          │             │             │
+          ▼             ▼             ▼
+    frontend-add   frontend-list   backend:8000
 ```
 
 ---
 
-# 🌐 Access the Applications
+# Why Two Frontends?
+
+The project deliberately separates the frontend functionality into two independent React applications:
+
+### Frontend Add
+
+Responsible for creating achievements.
+
+```text
+/app1/
+```
+
+### Frontend List
+
+Responsible for displaying achievements.
+
+```text
+/app2/
+```
+
+This demonstrates that multiple independent frontend services can be deployed and routed through a single public Nginx entry point.
+
+---
+
+# Why Nginx Instead of an ALB?
+
+The deployment requirement was to implement the architecture **without using an Application Load Balancer**.
+
+Instead of:
+
+```text
+Internet
+   ↓
+ALB
+   ↓
+ECS services
+```
+
+the architecture uses:
+
+```text
+Internet
+   ↓
+Nginx Fargate
+   ↓
+ECS services
+```
+
+Nginx handles the application-level path routing:
+
+```text
+/app1/
+/app2/
+/api/
+```
+
+This also allowed the existing Docker Compose Nginx routing configuration to be reused conceptually when moving the application to ECS.
+
+---
+
+# Nginx Service
+
+The Nginx ECS service is the only application component intended to receive public traffic.
+
+It is deployed in a public subnet and provides the public HTTP entry point.
+
+The service configuration is shown here:
+
+![Nginx ECS Service](docs/screenshots/nginx-service.png)
+
+The remaining application services communicate internally through ECS networking and Service Connect.
+
+---
+
+# Request Flow
+
+## Frontend Add Request
+
+When a user accesses:
+
+```text
+/app1/
+```
+
+the request follows:
+
+```text
+Browser
+   │
+   ▼
+Nginx Fargate
+   │
+   │ /app1/
+   ▼
+Frontend Add
+```
+
+---
+
+## Frontend List Request
+
+When a user accesses:
+
+```text
+/app2/
+```
+
+the request follows:
+
+```text
+Browser
+   │
+   ▼
+Nginx Fargate
+   │
+   │ /app2/
+   ▼
+Frontend List
+```
+
+---
+
+## API Request
+
+When an API request is made:
+
+```text
+/api/achievements
+```
+
+the request follows:
+
+```text
+Browser
+   │
+   ▼
+Nginx
+   │
+   │ /api/
+   ▼
+Backend :8000
+   │
+   │ PostgreSQL :5432
+   ▼
+PostgreSQL
+```
+
+---
+
+# End-to-End Data Flow
+
+For example, when a user adds an achievement:
+
+```text
+User
+ │
+ ▼
+/app1/
+ │
+ ▼
+Nginx
+ │
+ ▼
+Frontend Add
+ │
+ │ POST /app1/api/achievements
+ ▼
+Nginx
+ │
+ ▼
+Backend
+ │
+ ▼
+PostgreSQL
+ │
+ ▼
+EFS
+```
+
+When the list frontend retrieves achievements:
+
+```text
+User
+ │
+ ▼
+/app2/
+ │
+ ▼
+Frontend List
+ │
+ │ GET /app2/api/achievements
+ ▼
+Nginx
+ │
+ ▼
+Backend
+ │
+ ▼
+PostgreSQL
+ │
+ ▼
+Response
+ │
+ ▼
+Frontend List
+```
+
+---
+
+# Deployment Approach
+
+The deployment evolved from a local Docker environment into an AWS-managed container environment.
+
+## Stage 1 — Docker Containerization
+
+The application was divided into:
+
+```text
+Frontend Add
+Frontend List
+Backend
+PostgreSQL
+Nginx
+```
+
+and orchestrated locally using Docker Compose.
+
+---
+
+## Stage 2 — Container Images
+
+Each application component was built into a Docker image.
+
+The images were tagged for Amazon ECR.
+
+---
+
+## Stage 3 — Amazon ECR
+
+The container images were pushed to private ECR repositories.
+
+```text
+Docker
+   │
+   ▼
+ECR repositories
+```
+
+---
+
+## Stage 4 — ECS Task Definitions
+
+Task definitions were created for the individual workloads.
+
+These specify the container images, resource allocations, ports, networking, environment configuration, logging, and storage requirements.
+
+---
+
+## Stage 5 — ECS Fargate Services
+
+The task definitions were deployed as ECS services.
+
+The final ECS environment contains:
+
+```text
+5 ECS services
+```
+
+corresponding to the five application components.
+
+---
+
+## Stage 6 — Service Connect
+
+Service Connect was configured to allow ECS workloads to communicate using service names.
+
+This removed the need to manually manage changing Fargate task IP addresses.
+
+---
+
+## Stage 7 — Nginx Public Entry Point
+
+Nginx was deployed as a Fargate task in the public subnet.
+
+It receives public HTTP traffic and routes requests according to the URL context.
+
+---
+
+# Verification and Testing
+
+After deployment, the application was tested through the Nginx public endpoint.
+
+## Frontend Add
+
+```bash
+curl -i http://<NGINX_PUBLIC_IP>/app1/
+```
+
+Expected result:
+
+```text
+HTTP/1.1 200 OK
+```
+
+---
+
+## Frontend List
+
+```bash
+curl -i http://<NGINX_PUBLIC_IP>/app2/
+```
+
+Expected result:
+
+```text
+HTTP/1.1 200 OK
+```
+
+---
+
+## Backend API
+
+```bash
+curl -i http://<NGINX_PUBLIC_IP>/api/achievements
+```
+
+The API successfully returned achievement data from PostgreSQL.
+
+Example response:
+
+```json
+[
+  {
+    "id": 1,
+    "title": "completed task",
+    "created_at": "2026-08-02T10:31:33.817945"
+  }
+]
+```
+
+These tests verify that Nginx successfully routes requests to the correct internal ECS services.
+
+---
+
+# Screenshots
+
+The project includes screenshots documenting the AWS infrastructure and application deployment.
+
+## Application
 
 ### Add Achievement
 
-```text
-http://localhost/app1/
-```
+![Add Achievement](docs/screenshots/add-screen.png)
 
-### List Achievements
+The Add frontend is accessible through the `/app1/` context.
 
-```text
-http://localhost/app2/
-```
+### Achievement List
 
-### API
+![Achievement List](docs/screenshots/list-screen.png)
 
-```text
-http://localhost/api/achievements
-```
+The List frontend is accessible through the `/app2/` context.
 
 ---
 
-# 📸 Screenshots
+## ECS Cluster and Services
 
-The repository includes screenshots documenting the running application and Docker infrastructure.
+![ECS Cluster and Services](docs/screenshots/cluster-and-services.png)
 
-## Add Achievement Screen
-
-Shows the frontend used to create achievements.
-
-![Add Achievement Screen](./docs/screenshots/add-screen.png)
+Shows the deployed ECS cluster and its application services.
 
 ---
 
-## Achievement List Screen
+## Nginx Service
 
-Shows the frontend used to retrieve and display saved achievements.
+![Nginx Service](docs/screenshots/nginx-service.png)
 
-![Achievement List Screen](./docs/screenshots/list-screen.png)
-
----
-
-## Running Containers
-
-Demonstrates the five-container application stack running through Docker Compose.
-
-![Running Containers](./docs/screenshots/containers.png)
+Shows the Nginx Fargate service that acts as the public application entry point.
 
 ---
 
-## Docker Network
+## ECS Task Definitions
 
-Shows the dedicated Docker network used for communication between the services.
+![Task Definitions](docs/screenshots/task-definitions.png)
 
-![Docker Network](./docs/screenshots/network.png)
-
----
-
-## Nginx Configuration
-
-Shows the reverse proxy configuration responsible for routing traffic between the applications and backend.
-
-![Nginx Configuration](./docs/screenshots/nginx.png)
+Shows the task definitions used to configure the deployed containers.
 
 ---
 
-## PostgreSQL Volume
+## Amazon ECR
 
-Shows the persistent Docker volume used by PostgreSQL.
+![ECR Repositories](docs/screenshots/ecr-repos.png)
 
-![PostgreSQL Volume](./docs/screenshots/volume.png)
-
----
-
-# 🗺 Architecture Diagram
-
-A complete interactive architecture diagram is available at:
-
-[`docs/architecture.html`](./docs/architecture.html)
-
-The diagram illustrates:
-
-* Browser access
-* Nginx reverse proxy
-* `/app1/` routing
-* `/app2/` routing
-* `/api/` routing
-* Frontend containers
-* FastAPI backend
-* PostgreSQL
-* Docker bridge networking
-* Persistent database storage
+Shows the private ECR repositories containing the container images.
 
 ---
 
-# 📚 Learning Outcomes
+## ECS Service Connect Namespace
 
-This project provides hands-on experience with:
+![Service Connect Namespace](docs/screenshots/namespace.png)
 
-* Docker fundamentals
-* Dockerfiles
-* Docker images
+Shows the ECS Service Connect namespace used for internal service communication.
+
+---
+
+## Amazon EFS
+
+![EFS](docs/screenshots/efs.png)
+
+Shows the EFS storage configuration used by PostgreSQL.
+
+---
+
+## VPC Endpoints
+
+![VPC Endpoints](docs/screenshots/endpoints.png)
+
+Shows the VPC endpoints used to provide private AWS service connectivity.
+
+---
+
+## VPC Resource Map
+
+![VPC Resource Map](docs/screenshots/vpc-resource-map.png)
+
+Shows the VPC resources and network topology.
+
+---
+
+# Key Design Decisions
+
+## 1. ECS Fargate Instead of EC2
+
+Fargate was selected so that the container workloads could run without managing ECS worker instances.
+
+This allows the project to focus on:
+
 * Containers
-* Docker Compose
-* Multi-container architectures
-* Bridge networks
-* Docker DNS
-* Container-to-container communication
-* Port publishing
-* Internal container ports
-* Named volumes
-* PostgreSQL containerization
-* Healthchecks
-* Service dependencies
-* Nginx reverse proxy
-* Path-based routing
-* React production builds
-* FastAPI containerization
-* Frontend/backend separation
-* Debugging container connectivity
-* Inspecting Docker networks
-* Inspecting containers
-* Reading container logs
-* Rebuilding individual services
-* Verifying production-style container communication
+* Task definitions
+* Services
+* Networking
+* Service discovery
+* Application architecture
+
+rather than EC2 host management.
 
 ---
 
-# 🔮 Future Improvements
+## 2. Nginx Instead of ALB
 
-Possible future enhancements include:
+An ALB was intentionally not used because the deployment requirement was to implement context-based routing without an Application Load Balancer.
 
-* Authentication and authorization
-* Achievement categories
-* Achievement editing and deletion
-* Search and filtering
-* Pagination
-* Better database migrations
-* Automated testing
-* CI/CD with GitHub Actions
-* Container image publishing to a registry
-* HTTPS/TLS
-* Production deployment to AWS
-* Monitoring and observability
-* Centralized logging
-* Docker image security scanning
-* Resource limits and healthchecks for all services
-* Kubernetes deployment
-
----
-
-# 🎯 Project Purpose
-
-The main goal of this project is not simply to run a web application.
-
-It demonstrates how a full-stack application can be broken into independent services and connected using Docker's core capabilities:
+Nginx provides the routing layer:
 
 ```text
-                Docker Compose
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-   Container      Container      Container
-       │              │              │
-    Frontend       Backend       Database
-       │              │              │
-       └──────────────┼──────────────┘
-                      │
-               Docker Network
-                      │
-                  Nginx Proxy
-                      │
-                   Browser
+/app1/
+/app2/
+/api/
 ```
 
-The project therefore serves as a practical demonstration of **containerization, orchestration with Docker Compose, networking, persistent storage, reverse proxying, and multi-service application design**.
+---
+
+## 3. Separate Frontends
+
+The original application concept was expanded into two independent frontend services.
+
+This demonstrates how different application interfaces can be independently containerized and deployed.
 
 ---
 
-## 👩‍💻 Author
+## 4. ECS Service Connect
 
-**Malahim Ch**
+Service Connect was used instead of relying on static private IP addresses.
 
-GitHub: [@MalahimCh](https://github.com/MalahimCh)
+Fargate tasks can be replaced or recreated, so directly depending on task IP addresses would not be a robust design.
 
-Repository: [achievement-tracker-docker-compose](https://github.com/MalahimCh/achievement-tracker-docker-compose)
+Service Connect allows applications to use logical service names.
 
 ---
 
-## ⭐ If you found this project useful
+## 5. EFS for Database Persistence
 
-Feel free to explore the architecture, Docker Compose configuration, individual Dockerfiles, and the troubleshooting/verification commands used throughout the project.
+EFS was used to provide persistent storage for PostgreSQL.
+
+This means database storage is separated from the ephemeral lifecycle of the Fargate task.
+
+---
+
+## 6. Private Application Services
+
+The application and database services do not need to be publicly exposed.
+
+Nginx acts as the public entry point, while internal services communicate using private networking.
+
+---
+
+# Security Considerations
+
+The architecture applies network separation between the public entry point and internal services.
+
+Key principles include:
+
+* Only the Nginx layer is exposed publicly.
+* Frontend services are accessed internally.
+* Backend traffic is restricted to required application sources.
+* PostgreSQL is not directly exposed to the internet.
+* EFS access is controlled through its security group.
+* AWS service connectivity is provided through VPC endpoints.
+* Sensitive configuration values should be supplied through environment configuration or AWS secret-management mechanisms rather than committed to source control.
+
+### Important
+
+Never commit files containing:
+
+```text
+.env
+AWS access keys
+AWS secret keys
+database passwords
+private keys
+credentials
+```
+
+to a public GitHub repository.
+
+---
+
+# What This Project Demonstrates
+
+This project demonstrates practical experience with:
+
+### Docker
+
+* Dockerfiles
+* Multi-stage builds
+* Container images
+* Docker Compose
+* Container networking
+* Volumes
+* Nginx containers
+
+### Linux
+
+* WSL2
+* Bash
+* Docker CLI
+* Networking diagnostics
+* `curl`
+* Container troubleshooting
+
+### AWS
+
+* Amazon VPC
+* Subnets
+* Security Groups
+* VPC endpoints
+* Amazon ECR
+* Amazon ECS
+* AWS Fargate
+* ECS Task Definitions
+* ECS Services
+* ECS Service Connect
+* Amazon EFS
+* CloudWatch Logs
+
+### Networking
+
+* Public/private network separation
+* Port-based communication
+* Service discovery
+* Reverse proxies
+* Context-based routing
+* HTTP routing
+* Internal service communication
+
+### Application Architecture
+
+* React frontend
+* FastAPI backend
+* PostgreSQL database
+* Nginx reverse proxy
+* Persistent storage
+* Multi-container application design
+
+---
+
+# Future Improvements
+
+Possible future improvements include:
+
+* HTTPS/TLS using a domain name and certificate
+* Route 53 DNS integration
+* Automated CI/CD pipeline
+* GitHub Actions or Jenkins
+* ECS deployment automation
+* AWS Secrets Manager for database credentials
+* ECS service auto scaling
+* CloudWatch dashboards and alarms
+* Multi-AZ application deployment
+* Blue/green deployments
+* Infrastructure as Code using Terraform or AWS CloudFormation
+* Container image vulnerability scanning
+* Immutable ECR image tags
+* Health checks for application containers
+* Centralized observability and monitoring
+
+---
+
+# Conclusion
+
+This project demonstrates the progression of a containerized application from a local Docker environment to a production-oriented AWS container deployment.
+
+The final architecture consists of:
+
+```text
+                    Internet
+                       │
+                       ▼
+                Nginx Fargate
+                       │
+        ┌──────────────┼──────────────┐
+        │              │              │
+      /app1/         /app2/         /api/
+        │              │              │
+        ▼              ▼              ▼
+   Frontend Add   Frontend List    FastAPI
+                                      │
+                                      ▼
+                                  PostgreSQL
+                                      │
+                                      ▼
+                                     EFS
+```
+
+The project achieves context-based routing without an Application Load Balancer while using ECS Fargate, Service Connect, ECR, EFS, VPC networking, and Nginx to create a multi-container cloud deployment.
+
+The resulting architecture provides a practical demonstration of how containerized applications can transition from **Docker Compose-based local development to AWS ECS Fargate orchestration** while maintaining service separation, internal networking, routing, and persistent storage.
+
+---
+
+## Author
+
+**Malahim Chaudhary**
+
+Computer Science | DevOps & Cloud Engineering
+
+---
+
+> **Project note:** This repository focuses on the containerization, AWS infrastructure, ECS Fargate deployment, networking, routing, service discovery, and persistent-storage aspects of the Achievement Tracker application.
